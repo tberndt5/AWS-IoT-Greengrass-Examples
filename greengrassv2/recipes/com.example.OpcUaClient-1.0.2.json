@@ -1,0 +1,60 @@
+{
+  "RecipeFormatVersion": "2020-01-25",
+  "ComponentName": "com.example.OpcUaClient",
+  "ComponentVersion": "1.0.2",
+  "ComponentDescription": "OPC UA client publishing telemetry and status to IoT Core.",
+  "ComponentPublisher": "Me",
+  "ComponentDependencies": {
+    "aws.greengrass.Nucleus": {
+      "VersionRequirement": ">=2.0.0 <3.0.0",
+      "DependencyType": "SOFT"
+    }
+  },
+  "ComponentConfiguration": {
+    "DefaultConfiguration": {
+      "endpoint": "opc.tcp://127.0.0.1:4840/freeopcua/server/",
+      "nodeIds": [
+        "ns=2;s=Temperature",
+        "ns=2;s=Pressure"
+      ],
+      "pollIntervalSeconds": 5,
+      "readTimeoutSeconds": 5,
+      "enabled": true,
+      "accessControl": {
+        "aws.greengrass.ipc.mqttproxy": {
+          "com.example.OpcUaClient:mqttproxy:1": {
+            "policyDescription": "Publish telemetry and status, receive commands.",
+            "operations": [
+              "aws.greengrass#PublishToIoTCore",
+              "aws.greengrass#SubscribeToIoTCore"
+            ],
+            "resources": [
+              "factory/Test_1/telemetry",
+              "factory/Test_1/status",
+              "factory/Test_1/command"
+            ]
+          }
+        }
+      }
+    }
+  },
+  "Manifests": [
+    {
+      "Platform": {
+        "os": "linux"
+      },
+      "Lifecycle": {
+        "Install": {
+          "Timeout": 900,
+          "Script": "python3 -m venv {work:path}/venv && {work:path}/venv/bin/pip install --upgrade pip && {work:path}/venv/bin/pip install asyncua awsiotsdk"
+        },
+        "Run": "{work:path}/venv/bin/python -u {artifacts:path}/opcua_client.py"
+      },
+      "Artifacts": [
+        {
+          "Uri": "s3://<ARTIFACTS>/artifacts/com.example.OpcUaClient/1.0.2/opcua_client.py"
+        }
+      ]
+    }
+  ]
+}
