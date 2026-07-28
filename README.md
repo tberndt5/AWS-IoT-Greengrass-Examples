@@ -1,8 +1,8 @@
 # greengrassv2
-## Example using OpcUa Client on a Raspberry Pi
+## AWS IoT Greengrass V2 components for a Raspberry Pi edge device. 
 
-AWS IoT Greengrass V2 components for a Raspberry Pi edge device. Contents of
-`~/greengrassv2/` the artifacts uploaded to S3 and the recipes registered
+Contents of
+`~/greengrassv2/` — the artifacts uploaded to S3 and the recipes registered
 with AWS.
 
 Device: `Test_1` · Region: `us-east-2` · Nucleus: `2.18.2`
@@ -32,11 +32,162 @@ directory layout mirrors the S3 key structure exactly:
 s3://greengrass-artifacts-<account>/artifacts/<ComponentName>/<Version>/<file>
 ```
 
+---
+
+## Prerequisites on the Pi
+
+64-bit Raspberry Pi OS. Confirm before anything else, because the wrong
+architecture is silent until a binary refuses to run:
+
+```bash
+uname -m        # aarch64
+lsb_release -a
+```
+
+`armv7l` means a 32-bit OS. AWS ships no CLI v2 build for it — reflash to
+64-bit, or run all AWS commands from another machine.
+
+### Packages
+
+```bash
+sudo apt update
+sudo apt install -y default-jdk python3-venv python3-dev unzip curl git
+
+java -version         # 11 or newer
+python3 --version     # 3.9 or newer
+```
+
+The Greengrass nucleus is a Java application even though the components here
+are Python. `python3-venv` and `python3-dev` are needed by the component's
+`Install` script — without them the venv creation or the `awscrt` build fails
+with an unhelpful error.
+
+### AWS CLI v2
+
+```bash
+curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o awscliv2.zip
+unzip awscliv2.zip
+sudo ./aws/install
+aws --version
+```
+
+Use `awscli-exe-linux-x86_64.zip` on x86. Do not use `apt install awscli` —
+that installs v1, which has no `greengrassv2` subcommands.
+
+### Greengrass nucleus installer
+
+```bash
+curl -s https://d2s8p88vqu9w66.cloudfront.net/releases/greengrass-nucleus-latest.zip \
+  > greengrass-nucleus-latest.zip
+unzip greengrass-nucleus-latest.zip -d GreengrassInstaller
+```
+
+Provisioning command is in `CHEATSHEET.md`. It needs AWS credentials once;
+afterwards the device authenticates with its own X.509 certificate.
+
+### Optional
+
+```bash
+sudo apt install -y tshark      # wire-level OPC UA capture
+```
+
+### Versions this was built against
+
+| Component | Version |
+|---|---|
+| Greengrass nucleus | 2.18.2 |
+| Java | OpenJDK 17 |
+| Python | 3.13 |
+| asyncua | 2.0.1 |
+| awsiotsdk | 1.31.0 |
+| awscrt | 0.36.1 |
+
+---
+
+## Test environment
+
+A local OPC UA server so the component has something to read without touching
+real equipment. Runs as your own user, entirely outside Greengrass.
+
+### Setup
+
+```bash
+python3 -m venv ~/opcua-test
+~/opcua-test/bin/pip install --upgrade pip
+~/opcua-test/bin/pip install asyncua
+```
+
+Separate from the component's venv, which Greengrass builds under
+`/greengrass/v2/work/<component>/venv` and owns.
+
+### Running
+
+Terminal 1 — the server:
+
+```bash
+~/opcua-test/bin/python testing/test_server_debug.py
+```
+
+It prints the node IDs it registered and then updates them once a second:
+
+```
+temperature node: ns=2;s=Temperature
+pressure node:    ns=2;s=Pressure
+listening on opc.tcp://0.0.0.0:4840/freeopcua/server/
+```
+
+Ctrl-C shuts it down cleanly, closing sessions and releasing port 4840.
+
+Terminal 2 — one annotated Read:
+
+```bash
+~/opcua-test/bin/python testing/read_once.py
+```
+
+Builds a `ReadRequest` by hand and prints the response. Includes a deliberately
+bad node ID so you can see `BadNodeIdUnknown` returned as a per-node
+`StatusCode` while the request itself succeeds.
+
+Everything the server advertises:
+
+```bash
+~/opcua-test/bin/python testing/discover.py
+```
+
+Endpoints, security policies, accepted identity tokens, the NamespaceArray,
+supported service profiles, and the address space.
+
+### Pointing the component at it
+
+The component's default `endpoint` is already `opc.tcp://127.0.0.1:4840/freeopcua/server/`,
+so with the test server running it connects on its own. The component runs as
+`ggc_user` and the server as your user, since they talk over a TCP
+socket on loopback.
+
+Confirm data is flowing:
+
+```bash
+sudo tail -f /greengrass/v2/logs/com.example.OpcUaClient.log
+```
+
+Then subscribe to `factory/Test_1/#` in the IoT Core MQTT test client to see
+telemetry and status arriving in AWS.
+
+Start the test server **before** the component connects, or its first act is
+logging connection refusals and backing off.
+
+### Wire-level capture
+
+```bash
+sudo tshark -i lo -f "tcp port 4840" -Y opcua -V
+```
+---
+
 ## com.example.OpcUaClient
 
 Connects to an OPC UA server, reads configured nodes on an interval, and
 publishes readings to IoT Core. Parameters are adjustable at runtime without
-redeploying. Run opcua_server.py in another termial to test.
+redeploying.
 
 ### Versions
 
@@ -101,6 +252,8 @@ Published only on transition, so the topic stays quiet while healthy.
 - No cloud connection means the nucleus spools QoS-1 messages in memory
   (~2.5 MB default, lost on restart)
 
+---
+
 ## testing/
 
 Local OPC UA tools, not part of any component or deployment.
@@ -111,6 +264,8 @@ Local OPC UA tools, not part of any component or deployment.
   including a deliberately bad node so `BadNodeIdUnknown` is visible
 - `discover.py` — dumps endpoints, security policies, identity tokens,
   namespaces, server profiles, and the address space
+
+---
 
 ## Notes
 
